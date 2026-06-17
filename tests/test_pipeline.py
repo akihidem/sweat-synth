@@ -113,6 +113,30 @@ def test_granular_density_scales():
     assert hi > lo, (lo, hi)
 
 
+def test_ambient_is_sparse_long_overlapping():
+    """アンビエント: 粒感より疎、長音(平均dur長い)、和音で重なる。"""
+    samples = dsp.process(eda_model.generate(eda_model.EdaConfig(duration_sec=60, seed=42)))
+    gran = midi_map.map_events_granular(samples, density=1.5, fs=32.0)
+    amb = midi_map.map_events_ambient(samples, fs=32.0)
+    assert len(amb.notes) < len(gran.notes) / 5, (len(amb.notes), len(gran.notes))
+    avg_amb = sum(d for _, _, _, d in amb.notes) / len(amb.notes)
+    avg_gran = sum(d for _, _, _, d in gran.notes) / len(gran.notes)
+    assert avg_amb > 3.0 and avg_amb > avg_gran * 5, (avg_amb, avg_gran)
+    for (_, note, vel, dur) in amb.notes:
+        assert 0 <= note <= 127 and 1 <= vel <= 127 and dur > 0
+
+
+def test_reverb_preserves_length_and_adds_tail():
+    """reverbは長さを保ち、ドライ成分を残し、遅延後に残響を伸ばす。"""
+    import synth
+    buf = [0.0] * 6000               # 最短コム遅延(1116)より十分長く
+    buf[100] = 1.0                   # インパルス
+    out = synth.reverb(buf, sr=44100, wet=0.7, dry=0.3)
+    assert len(out) == len(buf)
+    assert abs(out[100] - 0.3) < 1e-6                  # ドライ成分が通る
+    assert any(abs(x) > 1e-5 for x in out[1300:])      # コム遅延後に残響が出る
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

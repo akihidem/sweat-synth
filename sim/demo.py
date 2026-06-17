@@ -26,21 +26,22 @@ def note_name(n: int) -> str:
 
 def piano_roll(notes, total_sec: float, width: int = 64) -> str:
     """実際に鳴った各音を行に、時間を列にしたASCIIピアノロール。
-    粒感モードでは1列に複数粒が重なるので濃淡(░▒▓█)で密度を表す。"""
+    █=発音、─=持続。粒感モードでは密集して帯になり、アンビエントでは長い持続線になる。"""
     pitches = sorted({n[1] for n in notes}, reverse=True)  # 高音が上
-    shades = " ░▒▓█"
     rows = []
     for p in pitches:
-        counts = [0] * width
+        lane = [" "] * width
         for (t, note, vel, dur) in notes:
             if note != p:
                 continue
-            x = int(t / total_sec * (width - 1))
-            if 0 <= x < width:
-                counts[x] += 1
-        mx = max(counts) or 1
-        lane = "".join(shades[min(4, (c * 4 + mx - 1) // mx)] if c else " " for c in counts)
-        rows.append(f"  {note_name(p):>4} │{lane}")
+            x0 = int(t / total_sec * (width - 1))
+            x1 = int((t + dur) / total_sec * (width - 1))
+            for x in range(x0, min(width, max(x0 + 1, x1 + 1))):
+                if x == x0:
+                    lane[x] = "█"
+                elif lane[x] == " ":
+                    lane[x] = "─"
+        rows.append(f"  {note_name(p):>4} │{''.join(lane)}")
     return "\n".join(rows)
 
 
@@ -50,11 +51,17 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--fs", type=float, default=32.0)
     ap.add_argument("--density", type=float, default=1.5)
+    ap.add_argument("--mode", choices=["granular", "sparse", "ambient"], default="granular")
     args = ap.parse_args(argv)
 
     cfg = eda_model.EdaConfig(fs=args.fs, duration_sec=args.duration, seed=args.seed)
     samples = dsp.process(eda_model.generate(cfg), fs=args.fs)
-    ev = midi_map.map_events_granular(samples, density=args.density, fs=args.fs)
+    if args.mode == "granular":
+        ev = midi_map.map_events_granular(samples, density=args.density, fs=args.fs)
+    elif args.mode == "ambient":
+        ev = midi_map.map_events_ambient(samples, fs=args.fs)
+    else:
+        ev = midi_map.map_events(samples)
 
     W = 64
     raw = [s.raw for s in samples]

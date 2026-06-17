@@ -21,6 +21,7 @@ python3 sim/run.py
 
 オプション:
 ```bash
+python3 sim/run.py --mode ambient                      # アンビエント(持続パッド+リバーブ)
 python3 sim/run.py --mode granular --density 2.0       # 粒感MAX(音数を最大化)
 python3 sim/run.py --mode sparse                       # SCRピークごとに1音(疎)
 python3 sim/run.py --duration 30 --seed 7 --bpm 100    # 別の汗のかき方
@@ -30,12 +31,15 @@ python3 sim/run.py --no-audio                          # MIDIだけ高速生成
 実行するとターミナルに ASCII で raw EDA / フィルタ後 / tonic / SCRピーク位置が出る。
 **見る用デモ**(波形＋ピアノロール):
 ```bash
-python3 sim/demo.py --density 2.0
+python3 sim/demo.py --mode ambient
+python3 sim/demo.py --mode granular --density 2.0
 ```
 
-### 2つの鳴らし方
+### 3つの鳴らし方
 - **granular(既定)** … 覚醒度(tonic+phasic)に比例して粒を撒く。汗をかくほど密に・短く・高く、
   SCRの瞬間は強アクセント+オクターブの煌めき。`--density` で粒の量を調整(60秒で~2000粒)。
+- **ambient** … 疎で長く重なり合う持続音。SCRは柔らかいswell(5〜9秒)、tonicは数秒ごとに動く
+  パッド和音。Freeverb方式のリバーブ(`synth.reverb`)で広い空間に。
 - **sparse** … SCRピークだけを点で鳴らす(発汗の“瞬間”を1音ずつ)。
 
 ## テスト

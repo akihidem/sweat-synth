@@ -28,8 +28,8 @@ def main(argv=None):
     ap.add_argument("--fs", type=float, default=32.0, help="センサ標本化レート(Hz)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--bpm", type=float, default=90.0)
-    ap.add_argument("--mode", choices=["granular", "sparse"], default="granular",
-                    help="granular=粒感(音数多)/ sparse=SCRピークごと1音")
+    ap.add_argument("--mode", choices=["granular", "sparse", "ambient"], default="granular",
+                    help="granular=粒感(音数多)/ sparse=SCRピークごと1音/ ambient=持続パッド+リバーブ")
     ap.add_argument("--density", type=float, default=1.5,
                     help="粒密度の倍率(granular時)。MAX寄りは 2.0〜)")
     ap.add_argument("--outdir", default=os.path.join(
@@ -49,6 +49,8 @@ def main(argv=None):
     # 3) 音楽イベントへ写像
     if args.mode == "granular":
         ev = midi_map.map_events_granular(samples, density=args.density, fs=args.fs)
+    elif args.mode == "ambient":
+        ev = midi_map.map_events_ambient(samples, fs=args.fs)
     else:
         ev = midi_map.map_events(samples)
 
@@ -58,7 +60,12 @@ def main(argv=None):
 
     wav_path = None
     if not args.no_audio:
-        buf = synth.render(ev, duration_sec=args.duration)
+        if args.mode == "ambient":
+            buf = synth.render(ev, duration_sec=args.duration, voice="pad",
+                               drone_harm=8, drone_gain=0.85, tail_sec=4.0)
+            buf = synth.reverb(buf, room=0.88, damp=0.25, wet=0.6, dry=0.45)
+        else:
+            buf = synth.render(ev, duration_sec=args.duration)
         wav_path = os.path.join(args.outdir, "sweat_demo.wav")
         synth.write_wav(buf, wav_path)
 

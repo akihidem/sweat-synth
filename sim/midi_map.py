@@ -123,6 +123,51 @@ def map_events_granular(samples, cfg: MapConfig | None = None,
 
 # ---------------- 標準MIDIファイル(SMF format 0) 書き出し ----------------
 
+def map_events_ambient(samples, cfg: MapConfig | None = None,
+                       fs: float | None = None, pad_period: float = 6.0) -> Events:
+    """アンビエントモード: 疎で長く、重なり合う音。
+
+    - SCRピーク → 柔らかい長音のswell(5〜9秒)。発汗の瞬間が霧のように立ち上がる。
+    - tonic    → 数秒ごとに更新される持続パッド和音(根音+5度+オクターブ相当)。
+                 覚醒度で音域と厚みがゆっくり動く。
+    音数は数十。リバーブ(synth.reverb)前提の素材。
+    """
+    cfg = cfg or MapConfig()
+    ev = Events()
+    _emit_cc(ev, samples, cfg)
+    if fs is None:
+        fs = (1.0 / (samples[1].t - samples[0].t)) if len(samples) > 1 else 32.0
+    pool = PENTATONIC_WIDE
+    total = samples[-1].t if samples else 0.0
+
+    # SCRピーク → 柔らかい長音swell
+    deg = 0
+    for s in samples:
+        if s.peak_amp is not None:
+            center = int(s.tonic_norm * (len(pool) - 4))
+            note = pool[max(0, min(len(pool) - 1, center + (deg % 3)))]
+            vel = 28 + int(s.tonic_norm * 45)        # 28〜73 と柔らかめ
+            dur = 5.0 + s.tonic_norm * 4.0           # 5〜9秒
+            ev.notes.append((s.t, note, vel, dur))
+            deg += 1
+
+    # tonic → 持続パッド和音(pad_period秒ごと、隣と重ねる)
+    def tonic_at(t):
+        idx = min(len(samples) - 1, max(0, int(t * fs)))
+        return samples[idx].tonic_norm
+    t = 0.0
+    while t < total:
+        tn = tonic_at(t)
+        root = int(tn * (len(pool) - 6))
+        chord = [pool[root], pool[min(len(pool) - 1, root + 2)],
+                 pool[min(len(pool) - 1, root + 4)]]      # 開いた3声
+        vel = 22 + int(tn * 30)                            # 22〜52 と静か
+        for nt in chord:
+            ev.notes.append((t, nt, vel, pad_period + 3.0))  # 次のパッドと重なる
+        t += pad_period
+    return ev
+
+
 def _vlq(n: int) -> bytes:
     """MIDI可変長数値。"""
     if n == 0:

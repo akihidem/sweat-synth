@@ -20,6 +20,61 @@ def _midi_to_hz(note: int) -> float:
     return 440.0 * 2 ** ((note - 69) / 12.0)
 
 
+# ---------------- リバーブ(Freeverb方式: 8コムフィルタ + 4オールパス) ----------------
+class _Comb:
+    def __init__(self, size: int, feedback: float, damp: float):
+        self.buf = [0.0] * max(1, size)
+        self.i = 0
+        self.fb = feedback
+        self.damp1 = damp
+        self.damp2 = 1.0 - damp
+        self.store = 0.0
+
+    def process(self, x: float) -> float:
+        out = self.buf[self.i]
+        self.store = out * self.damp2 + self.store * self.damp1
+        self.buf[self.i] = x + self.store * self.fb
+        self.i += 1
+        if self.i >= len(self.buf):
+            self.i = 0
+        return out
+
+
+class _Allpass:
+    def __init__(self, size: int, feedback: float):
+        self.buf = [0.0] * max(1, size)
+        self.i = 0
+        self.fb = feedback
+
+    def process(self, x: float) -> float:
+        b = self.buf[self.i]
+        out = -x + b
+        self.buf[self.i] = x + b * self.fb
+        self.i += 1
+        if self.i >= len(self.buf):
+            self.i = 0
+        return out
+
+
+def reverb(buf: list[float], sr: int = 44100, room: float = 0.86,
+           damp: float = 0.22, wet: float = 0.55, dry: float = 0.5) -> list[float]:
+    """広いアンビエント空間を付与。room=残響長, damp=高域減衰, wet/dry=混合。"""
+    scale = sr / 44100.0
+    combs = [_Comb(int(t * scale), room, damp)
+             for t in (1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617)]
+    aps = [_Allpass(int(t * scale), 0.5) for t in (556, 441, 341, 225)]
+    out = [0.0] * len(buf)
+    for n, x in enumerate(buf):
+        xin = x * 0.015                      # freeverb fixed input gain
+        s = 0.0
+        for c in combs:
+            s += c.process(xin)
+        for a in aps:
+            s = a.process(s)
+        out[n] = x * dry + s * wet
+    return out
+
+
 def _control_timeline(cc, ctrl: int, n_audio: int, sr: int, default: float):
     """指定CCを音声サンプル長の 0..1 配列に展開(線形補間)。"""
     pts = [(t, v / 127.0) for (t, c, v) in cc if c == ctrl]
@@ -42,8 +97,11 @@ def _control_timeline(cc, ctrl: int, n_audio: int, sr: int, default: float):
 
 
 def render(ev, duration_sec: float, sr: int = 44100,
-           drone_note: int = 36) -> list[float]:
-    n = int(duration_sec * sr) + sr  # 末尾の残響ぶん +1s
+           drone_note: int = 36, voice: str = "pluck",
+           drone_harm: int = 16, drone_gain: float = 1.0,
+           tail_sec: float = 1.0) -> list[float]:
+    """voice="pluck"(粒/疎)か "pad"(アンビエント=緩やかな膨らみと長い余韻)。"""
+    n = int((duration_sec + tail_sec) * sr)
     buf = [0.0] * n
 
     cutoff = _control_timeline(ev.cc, 74, n, sr, 0.3)   # 明るさ 0..1
@@ -52,10 +110,9 @@ def render(ev, duration_sec: float, sr: int = 44100,
     # --- ドローン: のこぎり波(倍音加算)。cutoffで倍音数を可変。 ---
     f0 = _midi_to_hz(drone_note)
     f0b = _midi_to_hz(drone_note + 0.08)   # 微妙にデチューンした2基で厚み
-    max_harm = 16
     for i in range(n):
         t = i / sr
-        nh = 1 + int(cutoff[i] * (max_harm - 1))
+        nh = 1 + int(cutoff[i] * (drone_harm - 1))
         s = 0.0
         for h in range(1, nh + 1):
             amp = 1.0 / h                     # のこぎり波の倍音則
@@ -63,26 +120,47 @@ def render(ev, duration_sec: float, sr: int = 44100,
                         + math.sin(2 * math.pi * f0b * h * t))
         # 倍音数で振幅が暴れるので正規化してから音量を当てる
         s *= 0.18 / max(1.0, math.log2(nh + 1) + 1)
-        buf[i] += s * (0.25 + 0.75 * volume[i])
+        buf[i] += drone_gain * s * (0.25 + 0.75 * volume[i])
 
-    # --- ノート/粒: 正弦プラック。短い粒ほど速く減衰させて締める(粒感) ---
+    # --- ノート ---
     for (t0, note, vel, dur) in ev.notes:
         f = _midi_to_hz(note)
         a = vel / 127.0
         start = int(t0 * sr)
-        decay = max(4.0, 1.1 / max(0.05, dur))   # dur短=減衰速い
-        length = int((dur + min(0.3, dur * 2.5)) * sr)  # 尾を粒長に追従させる
-        for k in range(length):
-            idx = start + k
-            if idx >= n:
-                break
-            tt = k / sr
-            env = math.exp(-tt * decay)
-            if tt < 0.004:                    # 速いアタック
-                env *= tt / 0.004
-            v = (math.sin(2 * math.pi * f * tt)
-                 + 0.3 * math.sin(2 * math.pi * f * 2 * tt))
-            buf[idx] += 0.22 * a * env * v
+        if voice == "pad":
+            # アンビエント: ゆっくり膨らみ(swell)→長い指数余韻。倍音は柔らかく。
+            atk = min(1.4, dur * 0.35)
+            rel = 0.45
+            length = int((dur + 3.5) * sr)
+            for k in range(length):
+                idx = start + k
+                if idx >= n:
+                    break
+                tt = k / sr
+                if tt < atk:
+                    env = tt / atk
+                else:
+                    env = math.exp(-(tt - atk) * rel)
+                trem = 0.85 + 0.15 * math.sin(2 * math.pi * 0.16 * tt + note)  # 緩い揺れ
+                v = (math.sin(2 * math.pi * f * tt)
+                     + 0.25 * math.sin(2 * math.pi * f * 2 * tt)
+                     + 0.12 * math.sin(2 * math.pi * f * 3 * tt))
+                buf[idx] += 0.16 * a * env * trem * v
+        else:
+            # 粒/疎: 正弦プラック。短い粒ほど速く減衰させて締める。
+            decay = max(4.0, 1.1 / max(0.05, dur))
+            length = int((dur + min(0.3, dur * 2.5)) * sr)
+            for k in range(length):
+                idx = start + k
+                if idx >= n:
+                    break
+                tt = k / sr
+                env = math.exp(-tt * decay)
+                if tt < 0.004:
+                    env *= tt / 0.004
+                v = (math.sin(2 * math.pi * f * tt)
+                     + 0.3 * math.sin(2 * math.pi * f * 2 * tt))
+                buf[idx] += 0.22 * a * env * v
     return buf
 
 
