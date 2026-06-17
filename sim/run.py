@@ -28,6 +28,10 @@ def main(argv=None):
     ap.add_argument("--fs", type=float, default=32.0, help="センサ標本化レート(Hz)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--bpm", type=float, default=90.0)
+    ap.add_argument("--mode", choices=["granular", "sparse"], default="granular",
+                    help="granular=粒感(音数多)/ sparse=SCRピークごと1音")
+    ap.add_argument("--density", type=float, default=1.5,
+                    help="粒密度の倍率(granular時)。MAX寄りは 2.0〜)")
     ap.add_argument("--outdir", default=os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "out"))
     ap.add_argument("--no-audio", action="store_true", help="WAV生成を省く(速い)")
@@ -43,7 +47,10 @@ def main(argv=None):
     samples = dsp.process(raw, fs=args.fs)
 
     # 3) 音楽イベントへ写像
-    ev = midi_map.map_events(samples)
+    if args.mode == "granular":
+        ev = midi_map.map_events_granular(samples, density=args.density, fs=args.fs)
+    else:
+        ev = midi_map.map_events(samples)
 
     # 4) 書き出し
     mid_path = os.path.join(args.outdir, "sweat_demo.mid")
@@ -62,14 +69,16 @@ def main(argv=None):
     filt_vals = [s.filt for s in samples]
 
     print("=" * 78)
-    print(f" 手汗演奏デモ  {args.duration:.0f}s @ {args.fs:.0f}Hz  seed={args.seed}  bpm={args.bpm:.0f}")
+    print(f" 手汗演奏デモ  {args.duration:.0f}s @ {args.fs:.0f}Hz  seed={args.seed}  "
+          f"mode={args.mode}" + (f"(density={args.density})" if args.mode == "granular" else ""))
     print("=" * 78)
     print(f" raw EDA   : {viz.sparkline(raw_vals)}")
     print(f" filtered  : {viz.sparkline(filt_vals)}   (リップル/ノイズ除去後)")
     print(f" tonic_norm: {viz.sparkline(tonic_norm)}   → CC74/CC7(明るさ・音量)")
     print(f" SCR peaks : {viz.peak_lane([0], [p.t for p in peaks], args.duration)}   → Note On")
     print("-" * 78)
-    print(f" 検出ピーク(発音数) : {len(peaks)}")
+    print(f" 検出SCRピーク       : {len(peaks)}")
+    print(f" 発音(粒)数          : {len(ev.notes)}")
     print(f" CCイベント数        : {len(ev.cc)}")
     print(f" raw EDA レンジ      : {min(raw_vals):.2f}..{max(raw_vals):.2f} µS")
     print(f" 出力 MIDI           : {mid_path}")

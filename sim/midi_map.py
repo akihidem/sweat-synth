@@ -16,6 +16,9 @@ from dataclasses import dataclass, field
 # Cマイナー・ペンタトニック(暗め・東洋的)。好みで差し替え可。
 PENTATONIC = [60, 63, 65, 67, 70, 72, 75, 77]  # C Eb F G Bb C Eb F
 
+# 粒感(グラニュラー)用の広いプール: C3〜Bb6 の4オクターブ・ペンタトニック。
+PENTATONIC_WIDE = [48 + 12 * o + d for o in range(4) for d in (0, 3, 5, 7, 10)]
+
 
 @dataclass
 class MapConfig:
@@ -28,6 +31,14 @@ class MapConfig:
     vel_min: int = 40
     vel_max: int = 120
     peak_to_vel: float = 250.0    # peak_amp(µS) → velocity スケール
+    # --- グラニュラー(粒感)パラメータ ---
+    grain_rate_min: float = 3.0   # tonic最小時の粒レート(粒/秒)
+    grain_rate_max: float = 24.0  # tonic最大時の粒レート(粒/秒)
+    phasic_drive: float = 45.0    # phasic(急な発汗)が粒密度を押し上げる量
+    grain_dur_min: float = 0.06   # 高密度時の粒の長さ(秒)=短く締まる
+    grain_dur_max: float = 0.22   # 低密度時の粒の長さ(秒)
+    grain_vel_min: int = 32
+    grain_vel_max: int = 112
 
 
 @dataclass
@@ -37,16 +48,23 @@ class Events:
     cc: list[tuple[float, int, int]] = field(default_factory=list)            # (t, ctrl, val0-127)
 
 
-def map_events(samples, cfg: MapConfig | None = None) -> Events:
-    cfg = cfg or MapConfig()
-    ev = Events()
-    deg = 0
+def _emit_cc(ev: Events, samples, cfg: MapConfig):
+    """tonic_norm を CC74(明るさ)/CC7(音量) として吐く(間引きあり)。"""
     for i, s in enumerate(samples):
         if i % cfg.cc_decimate == 0:
             v = int(round(s.tonic_norm * 127))
             v = 0 if v < 0 else 127 if v > 127 else v
             ev.cc.append((s.t, cfg.cutoff_cc, v))
             ev.cc.append((s.t, cfg.volume_cc, 30 + int(s.tonic_norm * 97)))  # 無音にしない床
+
+
+def map_events(samples, cfg: MapConfig | None = None) -> Events:
+    """疎(sparse)モード: SCRピークごとに1音。発汗の“瞬間”だけを点で鳴らす。"""
+    cfg = cfg or MapConfig()
+    ev = Events()
+    _emit_cc(ev, samples, cfg)
+    deg = 0
+    for s in samples:
         if s.peak_amp is not None:
             note = PENTATONIC[deg % len(PENTATONIC)]
             deg += 1
@@ -54,6 +72,52 @@ def map_events(samples, cfg: MapConfig | None = None) -> Events:
                                     (cfg.vel_max - cfg.vel_min))
             vel = max(cfg.vel_min, min(cfg.vel_max, vel))
             ev.notes.append((s.t, note, vel, cfg.note_dur_sec))
+    return ev
+
+
+# 粒の動きを作るスケール内ステップ(同じ音の連打を避ける)
+_GRAIN_PATTERN = [0, 2, 1, 3, 2, 4, 3, 1, 4, 0]
+
+
+def map_events_granular(samples, cfg: MapConfig | None = None,
+                        density: float = 1.0, fs: float | None = None) -> Events:
+    """粒感(グラニュラー)モード: 覚醒度に比例して粒を撒く。
+
+    粒レート = tonic(覚醒のベースライン) + phasic(急な発汗) で決まる。
+    汗をかくほど密に・短く・高く、SCRピークでは強アクセント+オクターブの煌めき。
+    density は全体の粒密度の倍率(>1 で MAX 寄り)。
+    """
+    cfg = cfg or MapConfig()
+    ev = Events()
+    _emit_cc(ev, samples, cfg)
+    if fs is None:
+        fs = (1.0 / (samples[1].t - samples[0].t)) if len(samples) > 1 else 32.0
+    pool = PENTATONIC_WIDE
+    span = cfg.grain_rate_max - cfg.grain_rate_min
+    phase = 0.0
+    k = 0
+    for s in samples:
+        rate = cfg.grain_rate_min + (s.tonic_norm ** 0.7) * span
+        if s.phasic > 0:
+            rate += s.phasic * cfg.phasic_drive
+        rate *= density
+        phase += rate / fs
+        accent = s.peak_amp is not None
+        while phase >= 1.0:
+            phase -= 1.0
+            center = int(s.tonic_norm * (len(pool) - 6))  # tonicで音域が上がる
+            deg = max(0, min(len(pool) - 1, center + _GRAIN_PATTERN[k % len(_GRAIN_PATTERN)]))
+            note = pool[deg]
+            vel = cfg.grain_vel_min + int(s.tonic_norm * (cfg.grain_vel_max - cfg.grain_vel_min))
+            if accent:
+                vel = min(127, vel + 25)
+            vel = max(1, min(127, vel))
+            dur = cfg.grain_dur_max - s.tonic_norm * (cfg.grain_dur_max - cfg.grain_dur_min)
+            ev.notes.append((s.t, note, vel, dur))
+            if accent:  # SCRの瞬間はオクターブ上を薄く重ねて煌めかせる
+                hi = pool[min(len(pool) - 1, deg + 5)]
+                ev.notes.append((s.t, hi, vel, dur * 0.7))
+            k += 1
     return ev
 
 

@@ -91,6 +91,28 @@ def test_velocity_in_range():
         assert 0 <= note <= 127
 
 
+def test_granular_is_dense_and_valid():
+    """粒感モード: sparseより遥かに音数が多く、note/velが範囲内、時刻は単調非減少。"""
+    data = eda_model.generate(eda_model.EdaConfig(duration_sec=40, seed=5))
+    samples = dsp.process(data)
+    sparse = midi_map.map_events(samples)
+    gran = midi_map.map_events_granular(samples, density=1.5, fs=32.0)
+    assert len(gran.notes) > 10 * len(sparse.notes), (len(gran.notes), len(sparse.notes))
+    last = -1.0
+    for (t, note, vel, dur) in gran.notes:
+        assert 0 <= note <= 127 and 1 <= vel <= 127 and dur > 0
+        assert t >= last - 1e-9          # 時刻は単調(SMFの delta が負にならない)
+        last = t
+
+
+def test_granular_density_scales():
+    """density を上げると粒が増える(単調)。"""
+    samples = dsp.process(eda_model.generate(eda_model.EdaConfig(duration_sec=30, seed=2)))
+    lo = len(midi_map.map_events_granular(samples, density=0.5, fs=32.0).notes)
+    hi = len(midi_map.map_events_granular(samples, density=2.0, fs=32.0).notes)
+    assert hi > lo, (lo, hi)
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

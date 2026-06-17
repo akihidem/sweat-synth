@@ -65,20 +65,21 @@ def render(ev, duration_sec: float, sr: int = 44100,
         s *= 0.18 / max(1.0, math.log2(nh + 1) + 1)
         buf[i] += s * (0.25 + 0.75 * volume[i])
 
-    # --- ノート: 正弦プラック(速attack/指数decay)+1オクターブ上を薄く ---
+    # --- ノート/粒: 正弦プラック。短い粒ほど速く減衰させて締める(粒感) ---
     for (t0, note, vel, dur) in ev.notes:
         f = _midi_to_hz(note)
         a = vel / 127.0
         start = int(t0 * sr)
-        length = int((dur + 0.4) * sr)
+        decay = max(4.0, 1.1 / max(0.05, dur))   # dur短=減衰速い
+        length = int((dur + min(0.3, dur * 2.5)) * sr)  # 尾を粒長に追従させる
         for k in range(length):
             idx = start + k
             if idx >= n:
                 break
             tt = k / sr
-            env = math.exp(-tt * 4.5)         # 減衰
-            if tt < 0.005:                    # 速いアタック
-                env *= tt / 0.005
+            env = math.exp(-tt * decay)
+            if tt < 0.004:                    # 速いアタック
+                env *= tt / 0.004
             v = (math.sin(2 * math.pi * f * tt)
                  + 0.3 * math.sin(2 * math.pi * f * 2 * tt))
             buf[idx] += 0.22 * a * env * v
