@@ -3,3 +3,4 @@ __pycache__/
 out/*.wav
 out/*.mid
 out/*.json
+data/

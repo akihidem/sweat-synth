@@ -65,6 +65,27 @@ python3 sim/llm_compose.py --bars 16 --bpm 120 --rounds 2   # 要 ollama + gemma
 **壁は評価ではなく生成の天井**だった ―― 「診断できること ≠ 直せること」。
 stdlib完結ではない唯一の部分(ollama依存)。
 
+### 🎹 コーパス統計で作曲 (`sim/corpus_compose.py`)
+才能を“表面”でなく“過程”で借りる。公共ドメインの **J.S.Bachコラール382曲(SATB)** から
+**和音→次の実voicing の遷移(Markov)を学習**し、Bachの声部進行(voice-leading)を継承したまま
+組み替えて新しい進行を生む。坂本龍一自身がBach/Debussy由来なので電子音響で鳴らすと橋が架かる。
+手汗は tonic→フィルタの演奏レイヤー。LLM不要・依存は numpy(pkl読込)のみ。
+```bash
+python3 sim/corpus_compose.py --order 2 --bpm 100 --transpose -3
+# data/jsb_chorales.pkl を最初に取得(8.5MB, gitignore対象):
+#   curl -L -o data/jsb_chorales.pkl \
+#     https://raw.githubusercontent.com/czhuang/JSB-Chorales-dataset/master/jsb-chorales-16th.pkl
+```
+**Markov次数のトレードオフ**(実測, 48和音):
+
+| order | ユニーク | 文脈の平均分岐 | 強制(=丸写し) | 性格 |
+|---|---|---|---|---|
+| 1 | 45/48 | 320 | 0% | 自由・新規性高/さまよいやすい |
+| 2 | 48/48 | 32 | 9% | 局所が自然で脈絡あり/一部Bach丸写し |
+
+gemma(LLM外注)が一番できなかった voice-leading が、ここでは**実在の名人の過程**として本物。
+ただし長距離の楽曲構造(起承転結)はMarkovには無い ── これがこの手法の天井。
+
 ### 3つの鳴らし方(シンプル版)
 - **granular(既定)** … 覚醒度(tonic+phasic)に比例して粒を撒く。汗をかくほど密に・短く・高く、
   SCRの瞬間は強アクセント+オクターブの煌めき。`--density` で粒の量を調整(60秒で~2000粒)。
