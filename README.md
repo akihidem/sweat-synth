@@ -53,6 +53,18 @@ python3 sim/studio.py --seed 7 --bpm 128 --bars 32
 ステレオ、ADSR、Moog風レゾナントフィルタ、テンポ同期ピンポンディレイ、Freeverbを全部 stdlib で実装。
 `sim/instruments.py` が楽器/エフェクト、`sim/studio.py` が編曲。
 
+### 🧪 実験: 「音楽的評価」を外注する (`sim/llm_compose.py`)
+手書きの進行/動機で“才能”を模倣しようとして失敗した反省から、**作曲と良し悪しの判断を
+ローカルLLM(ollama gemma4)に外注**する実験。LLMが記号領域で compose→critique→revise し、
+`instruments.py` が発音する(手汗は tonic→フィルタの演奏レイヤー)。
+```bash
+python3 sim/llm_compose.py --bars 16 --bpm 120 --rounds 2   # 要 ollama + gemma4
+```
+**知見**: 批評(尺度)の外注は機能する(指摘は鋭い)が、*良い音楽は出ない*。批評が和声停滞を
+指摘→和音の多様性は上がるが旋律が痩せる、というモグラ叩きになり、批評は飽和して満足しない。
+**壁は評価ではなく生成の天井**だった ―― 「診断できること ≠ 直せること」。
+stdlib完結ではない唯一の部分(ollama依存)。
+
 ### 3つの鳴らし方(シンプル版)
 - **granular(既定)** … 覚醒度(tonic+phasic)に比例して粒を撒く。汗をかくほど密に・短く・高く、
   SCRの瞬間は強アクセント+オクターブの煌めき。`--density` で粒の量を調整(60秒で~2000粒)。
