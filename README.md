@@ -35,7 +35,25 @@ python3 sim/demo.py --mode ambient
 python3 sim/demo.py --mode granular --density 2.0
 ```
 
-### 3つの鳴らし方
+### 🎼 制作エンジン: 手汗で奏でる「坂本龍一 × Kraftwerk × YMO」
+```bash
+python3 sim/studio.py                 # → out/sweat_studio.wav (ステレオ・約62秒)
+python3 sim/studio.py --seed 7 --bpm 128 --bars 32
+```
+機械が正確に刻むバッキングの上で、**手汗が演奏する**一曲を制作する:
+
+| 要素 | 由来 | 実装 |
+|------|------|------|
+| テンション和声(maj7/m9/6-9)+ FMベルのリード | 坂本龍一 | `instruments.add_fm` / `studio.PROG` |
+| 16分アルペジオ・4つ打ち・レゾナント・ラダーフィルタ | Kraftwerk | `instruments.ladder` / motorik bass |
+| 明るいペンタトニックの電子メロ・シンコペーション | YMO | `studio.MOTIF` |
+| **tonic→フィルタ開度スイープ / SCRピーク→リード発火(16分quantize)** | 手汗 | 演奏レイヤー |
+
+構成: intro(pad) → +rhythm(bass/drums) → full+lead → climax/outro。
+ステレオ、ADSR、Moog風レゾナントフィルタ、テンポ同期ピンポンディレイ、Freeverbを全部 stdlib で実装。
+`sim/instruments.py` が楽器/エフェクト、`sim/studio.py` が編曲。
+
+### 3つの鳴らし方(シンプル版)
 - **granular(既定)** … 覚醒度(tonic+phasic)に比例して粒を撒く。汗をかくほど密に・短く・高く、
   SCRの瞬間は強アクセント+オクターブの煌めき。`--density` で粒の量を調整(60秒で~2000粒)。
 - **ambient** … 疎で長く重なり合う持続音。SCRは柔らかいswell(5〜9秒)、tonicは数秒ごとに動く

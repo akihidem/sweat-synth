@@ -137,6 +137,45 @@ def test_reverb_preserves_length_and_adds_tail():
     assert any(abs(x) > 1e-5 for x in out[1300:])      # コム遅延後に残響が出る
 
 
+def test_instruments_midi_and_adsr():
+    """音程換算とADSR包絡の基本性質。"""
+    import instruments as ins
+    assert abs(ins.midi_hz(69) - 440.0) < 1e-6
+    assert abs(ins.midi_hz(81) - 880.0) < 1e-6
+    env = (0.1, 0.1, 0.5, 0.2)
+    assert ins.adsr(-1, 1.0, *env) == 0.0
+    assert abs(ins.adsr(0.1, 1.0, *env) - 1.0) < 1e-6      # アタック頂点
+    assert abs(ins.adsr(0.5, 1.0, *env) - 0.5) < 1e-6      # サステイン
+    assert ins.adsr(1.0 + 0.2 + 0.01, 1.0, *env) == 0.0    # リリース後は無音
+
+
+def test_ladder_attenuates_highs():
+    """ラダーフィルタ: 低遮断にすると高域(ナイキスト付近)の振幅が大きく減る。"""
+    import instruments as ins
+    sr = 44100
+    n = 4000
+    hi = [(1.0 if i % 2 == 0 else -1.0) for i in range(n)]  # 最高周波(ナイキスト)
+    out = ins.ladder(hi, sr, [0.0] * 64, 32.0, lo_hz=300, hi_hz=300, res=0.0)
+    import statistics
+    r_in = statistics.pstdev(hi[1000:])
+    r_out = statistics.pstdev(out[1000:])
+    assert r_out < r_in * 0.2, (r_in, r_out)
+
+
+def test_write_stereo_valid(tmp_path=None):
+    """write_stereo が2ch/16bitの妥当なWAVを書く。"""
+    import wave as _w, tempfile, os as _os
+    import instruments as ins
+    L = [0.1 * ((i % 100) / 100) for i in range(2000)]
+    R = [-x for x in L]
+    d = tempfile.mkdtemp()
+    p = _os.path.join(d, "s.wav")
+    ins.write_stereo(L, R, p, 44100)
+    w = _w.open(p, "rb")
+    assert w.getnchannels() == 2 and w.getsampwidth() == 2 and w.getnframes() == 2000
+    w.close()
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
