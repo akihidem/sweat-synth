@@ -52,21 +52,23 @@ def make_drift(N, sr):
 
 
 # ---------- プリペアド/減衰ピアノ(倍音は非整数=inharmonic, detune) ----------
-def piano_note(f, dur, sr, drift_slice, decay=6.0, B=0.00045):
+def piano_note(f, dur, sr, drift_slice, decay=6.0, B=0.00045, bright=0.5):
     n = int(dur * sr)
     t = np.arange(n) / sr
     td = t + drift_slice[:n]                      # wow&flutter で時間を歪ませる
     f *= 1.0 + RNG.uniform(-0.004, 0.004)         # 一音ごとの調律ずれ
+    # 強く弾くほど上倍音が立つ(実ピアノのタッチ): 弱=暗い1.8 / 強=明るい1.0 のロールオフ
+    rolloff = 1.8 - 0.8 * bright
     sig = np.zeros(n)
     for p in range(1, 9):
         fp = f * p * np.sqrt(1.0 + B * p * p)     # ピアノの非整数倍音
-        sig += (1.0 / p ** 1.4) * np.sin(2 * np.pi * fp * td)
+        sig += (1.0 / p ** rolloff) * np.sin(2 * np.pi * fp * td)
     env = np.exp(-t / decay)
     atk = int(0.004 * sr)
     if atk:
         env[:atk] *= np.linspace(0, 1, atk)
-    # フェルトの打鍵ノイズ(thunk)
-    thunk = RNG.standard_normal(n) * np.exp(-t * 70) * 0.18
+    # フェルトの打鍵ノイズ(thunk): 強い打鍵ほど硬い音(短く鋭く)
+    thunk = RNG.standard_normal(n) * np.exp(-t * (55 + 50 * bright)) * (0.12 + 0.12 * bright)
     return sig * env + thunk * env
 
 
@@ -76,12 +78,19 @@ def drone_bed(root_hz, D, sr, drift):
     t = np.arange(N) / sr
     td = t + drift
     out = np.zeros(N)
-    # 根音 + M2 + #11 のクラスタ(安心させない)
-    for mult, g in [(1, 1.0), (1.122, 0.5), (1.414, 0.32), (2, 0.4), (3, 0.16)]:
+    # 根音 + M2 + #11 のクラスタ(安心させない)。色音はゆっくり明滅し和声が呼吸する
+    parts = [(1, 1.0, False), (1.122, 0.5, True), (1.414, 0.32, True),
+             (2, 0.4, False), (3, 0.16, True)]
+    for i, (mult, g, color) in enumerate(parts):
         f = _snap(root_hz * mult, D)
         f2 = _snap(root_hz * mult + 0.6 / D, D)   # 唸り
-        out += g * (np.sin(2 * np.pi * f * td) + 0.6 * np.sin(2 * np.pi * f2 * td))
-    lfo = 0.55 + 0.45 * np.sin(2 * np.pi * _snap(0.05, D) * t)  # 呼吸
+        partial = np.sin(2 * np.pi * f * td) + 0.6 * np.sin(2 * np.pi * f2 * td)
+        if color:                                  # 色音だけ超低速で出入り(完全ループ保持)
+            rate = _snap(0.018 * (i + 1), D)       # 1/D の整数倍 → 周期Dで閉じる
+            glfo = 0.45 + 0.55 * (0.5 + 0.5 * np.sin(2 * np.pi * rate * t + i * 1.7))
+            partial = partial * glfo
+        out += g * partial
+    lfo = 0.55 + 0.45 * np.sin(2 * np.pi * _snap(0.05, D) * t)  # 全体の呼吸
     out *= lfo
     return out / (np.max(np.abs(out)) or 1)
 
@@ -126,32 +135,49 @@ def render(dur, seed, drone_name):
     R = np.zeros(N + 12 * SR)
 
     # --- ピアノ: SCRピークを間引いて疎に(rubato, グリッドに乗せない) ---
-    root_pc = 50
+    # 調性の重心をドローン根音に合わせ、piano と drone を関係づける(狙った不協和)
+    drone_hz = DRONE.get(drone_name, 100.0)
+    home_pc = int(round(12 * np.log2(drone_hz / 440.0) + 69)) % 12
+    home = 48 + home_pc                             # 重心(C3付近)
+    root_pc = home
+    prev_pitch = home                               # 声部進行の参照点
     notes = []
     last_t = -10.0
-    min_gap = 3.2                                  # 静寂を恐れない
+    min_gap = 3.2                                   # 静寂を恐れない
     for s in samples:
         if s.peak_amp is None or s.t - last_t < min_gap:
             continue
         last_t = s.t
-        # 根音をゆっくりドリフト(8秒ごと)
-        if RNG.random() < 0.12:
-            root_pc += RNG.choice([-2, -1, 1, 2])
+        # 重心は揺れて"帰る": ランダムウォーク + 重心への復元力
+        if RNG.random() < 0.18:
+            root_pc += int(RNG.choice([-2, -1, 1, 2]))
+            if abs(root_pc - home) > 5:             # 遠ざかり過ぎたら引き戻す
+                root_pc += int(np.sign(home - root_pc))
+        # 発汗(覚醒)が音域を緩く牽引 ─ 手汗の気配を残しつつ旋律の論理も生かす
         tn = tonic_at(s.t)
-        deg = RNG.choice(COLOR)
-        octave = 12 * RNG.choice([0, 1, 1, 2])
-        note = root_pc + deg + octave
-        amp = 0.18 + 0.45 * min(1.0, s.peak_amp * 4)
-        decay = 5.0 + 6.0 * RNG.random()           # 長い余韻
-        notes.append((s.t, note, amp, decay))
-        # 15%: 短2/長2度のクラスタ(不協和の色)
+        target = home + int(round(tn * 12))         # tonic がレジスタを"そっと"動かす
+        # 声部進行: color 度 × オクターブ候補から「前音と目標域に近い」線を選ぶ
+        cands = [root_pc + deg + 12 * o for deg in COLOR for o in (-1, 0, 1, 2)]
+        cands = [c for c in cands if 36 <= c <= 84]
+        if RNG.random() < 0.20:                     # 20%: 跳躍で気配を変える
+            note = int(RNG.choice(cands))
+        else:                                       # 80%: 前音優先・目標域は弱い牽引=滑らかな線
+            d = np.array([abs(c - prev_pitch) + 0.3 * abs(c - target) for c in cands], float)
+            w = np.exp(-d / 4.0)
+            note = int(RNG.choice(cands, p=w / w.sum()))
+        prev_pitch = note
+        touch = min(1.0, s.peak_amp * 4)            # 汗ピークの強さ=打鍵の強さ
+        amp = 0.18 + 0.45 * touch
+        decay = 5.0 + 6.0 * RNG.random()            # 長い余韻
+        notes.append((s.t, note, amp, decay, touch))
+        # 15%: 短2/長2度のクラスタ(不協和の色)。寄り添う音は柔らかく弾く
         if RNG.random() < 0.15:
-            notes.append((s.t + RNG.uniform(0, 0.05), note + RNG.choice([1, 2]),
-                          amp * 0.7, decay * 0.8))
+            notes.append((s.t + RNG.uniform(0, 0.05), note + int(RNG.choice([1, 2])),
+                          amp * 0.7, decay * 0.8, touch * 0.6))
 
-    for (t0, note, amp, decay) in notes:
+    for (t0, note, amp, decay, touch) in notes:
         start = int(t0 * SR)
-        sig = piano_note(midi_hz(note), decay, SR, drift[start:], decay=decay)
+        sig = piano_note(midi_hz(note), decay, SR, drift[start:], decay=decay, bright=touch)
         end = start + len(sig)
         pan = RNG.uniform(-0.4, 0.4)
         gl = amp * np.cos((pan + 1) * np.pi / 4)
@@ -189,7 +215,7 @@ def soul_check(L, R, notes, nf, D):
     win = SR // 10
     envv = np.sqrt(np.convolve(mono ** 2, np.ones(win) / win, "same"))
     silence = float(np.mean(envv < 0.02))
-    pcs = sorted({n % 12 for (_, n, _, _) in notes})
+    pcs = sorted({n % 12 for (_, n, *_rest) in notes})
     has_dissonance = any(((b - a) % 12) in (1, 2) for a in pcs for b in pcs if a != b)
     noise_present = float(np.sqrt(np.mean(nf ** 2))) > 1e-4
     checks = [
