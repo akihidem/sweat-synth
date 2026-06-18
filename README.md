@@ -65,6 +65,20 @@ python3 sim/llm_compose.py --bars 16 --bpm 120 --rounds 2   # 要 ollama + gemma
 **壁は評価ではなく生成の天井**だった ―― 「診断できること ≠ 直せること」。
 stdlib完結ではない唯一の部分(ollama依存)。
 
+### 🌫 async/SOUL系アンビエント (`sim/async_synth.py`) ← 今の方向
+「名人の才能」を追うのをやめ、~/ambient-tiktok の **SOUL.md(坂本龍一『async』血統)** の
+方向に転換。密・グリッド・協和・無菌・盛り盛りを全部捨て、七原理に従う:
+間と静寂が素材 / rubato(グリッドに乗せない) / 不協和の色(m2/M2/9th/#11) /
+環境と一体(テープヒス・ルームトーン・wow&flutter) / 不完全と退色(プリペアド/非整数倍音ピアノ) /
+過剰を削る(piano/drone/noiseの3層) / 沈思と喪失。手汗のSCRは疎なピアノの所作を引き起こす(間引き)。
+ドローンは ambient.py の 1/Dスナップで完全ループ。依存: numpy, scipy。
+```bash
+python3 sim/async_synth.py --dur 64 --drone theta   # → out/sweat_async.wav (48kHz stereo)
+```
+**評価問題の実用解**: 「良い/悪いは尺度化できない(最終判断は人間の耳)。だがSOULに照らして"違う"
+ものは弾く」── 測れない品質の代わりに、SOUL採否チェックを**自動の否定フィルタ**として実装
+(密度/静寂/不協和/ノイズ/レイヤー数を PASS/REJECT)。
+
 ### 🎹 コーパス統計で作曲 (`sim/corpus_compose.py`)
 才能を“表面”でなく“過程”で借りる。公共ドメインの **J.S.Bachコラール382曲(SATB)** から
 **和音→次の実voicing の遷移(Markov)を学習**し、Bachの声部進行(voice-leading)を継承したまま
