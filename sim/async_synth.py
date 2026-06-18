@@ -64,7 +64,7 @@ def piano_note(f, dur, sr, drift_slice, decay=6.0, B=0.00045, bright=0.5):
         fp = f * p * np.sqrt(1.0 + B * p * p)     # ピアノの非整数倍音
         sig += (1.0 / p ** rolloff) * np.sin(2 * np.pi * fp * td)
     env = np.exp(-t / decay)
-    atk = int(0.004 * sr)
+    atk = int((0.012 - 0.009 * bright) * sr)       # 弱打鍵=柔らかく遅い / 強打鍵=速い立上り
     if atk:
         env[:atk] *= np.linspace(0, 1, atk)
     # フェルトの打鍵ノイズ(thunk): 強い打鍵ほど硬い音(短く鋭く)
@@ -175,8 +175,14 @@ def render(dur, seed, drone_name):
             notes.append((s.t + RNG.uniform(0, 0.05), note + int(RNG.choice([1, 2])),
                           amp * 0.7, decay * 0.8, touch * 0.6))
 
+    # 大局フォーム: 入り・退きは静かに、中盤で深まる弧(音は増やさず強弱で形を作る)
+    def arc(t0):
+        x = t0 / max(D, 1)                          # 0..1
+        return 0.55 + 0.45 * np.sin(np.pi * min(1.0, max(0.0, x)))
+
     for (t0, note, amp, decay, touch) in notes:
         start = int(t0 * SR)
+        amp *= arc(t0)
         sig = piano_note(midi_hz(note), decay, SR, drift[start:], decay=decay, bright=touch)
         end = start + len(sig)
         pan = RNG.uniform(-0.4, 0.4)
@@ -185,8 +191,13 @@ def render(dur, seed, drone_name):
         L[start:end] += sig * gl
         R[start:end] += sig * gr
 
-    # --- ドローン(不協和クラスタ, 完全ループ) ---
-    bed = drone_bed(DRONE.get(drone_name, 100.0), D, SR, drift[:N]) * 0.16
+    # --- ドローン: 中盤で全音下降する構造的な"沈み"(沈思・喪失) ---
+    # 各ベッドは内部で完全ループ。クロスフェードで和声がひとつ動く
+    bed_hi = drone_bed(drone_hz, D, SR, drift[:N])
+    bed_lo = drone_bed(drone_hz * 2 ** (-2 / 12), D, SR, drift[:N])
+    tsec = np.arange(N) / SR
+    xf = 0.5 * (1.0 + np.tanh((tsec - 0.62 * D) / 3.5))   # ~62%で滑らかに hi→lo
+    bed = (bed_hi * (1 - xf) + bed_lo * xf) * 0.16
     L[:N] += bed
     R[:N] += bed
 
