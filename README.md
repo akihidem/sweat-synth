@@ -73,14 +73,17 @@ stdlib完結ではない唯一の部分(ollama依存)。
 過剰を削る(piano/drone/noiseの3層) / 沈思と喪失。手汗のSCRは疎なピアノの所作を引き起こす(間引き)。
 ドローンは ambient.py の 1/Dスナップで完全ループ。依存: numpy, scipy。
 ```bash
-python3 sim/async_synth.py --dur 64 --drone theta   # → out/sweat_async.wav (48kHz stereo)
+python3 sim/async_synth.py --dur 64  --drone theta   # → out/sweat_async.wav (48kHz stereo)
+python3 sim/async_synth.py --dur 180 --drone sub     # 長尺=楽章感(転調+多重スウェル)
+# 音律(--drone): sub / delta / theta / alpha / gamma の5種
 ```
 **音楽性の作り込み**(音を増やさず構造で／全てSOUL採否フィルタ内):
 - **手汗→音楽の実配線** … 発汗(覚醒tonic)が音域を緩く牽引(相関+0.5)、ピーク強度が打鍵の明るさ(高域比1.5→8.9%)とアタックを駆動
 - **声部進行** … 前音・目標域に近い候補を選び旋律の線に(平均跳躍 ~7→3半音)。調性重心に復元力をかけ漂流を防ぐ
 - **狙った不協和** … ドローン根音とピアノ調性中心を結合(偶然のズレでなく色)
-- **曲の形** … 入り→深まり→退きのフォーム弧＋中盤~62%でドローンが全音下降(沈思・喪失)
+- **曲の形** … 入り→深まり→退きのフォーム弧＋中盤~62%でドローンが全音下降(沈思・喪失)。長尺(>120s)は重心がゆっくり転調し「楽章」感
 - ドローン色音は完全ループ保持のまま超低速で明滅(和声が呼吸)
+- **プリペアドピアノ** … ~12%の音は物を挟んだ短く金属的な所作(非整数倍音を強調・専用RNGで既存シードの音列は不変)
 **評価問題の実用解**: 「良い/悪いは尺度化できない(最終判断は人間の耳)。だがSOULに照らして"違う"
 ものは弾く」── 測れない品質の代わりに、SOUL採否チェックを**自動の否定フィルタ**として実装
 (密度/静寂/不協和/ノイズ/レイヤー数を PASS/REJECT)。
@@ -149,9 +152,10 @@ pytest tests/                       # pytestでも可
 ## 実機への道
 
 1. ✅ シミュレータで DSP/マッピングを確定(済) ← `firmware/` は DSP も声部進行・タッチも同じ式を移植済み(起動ごとの種はA0ノイズから収穫)
-2. ⬜ `docs/bom.md` の部品を発注
-3. ⬜ `docs/wiring.md` に従って組む(=電子工作。範囲外)
-4. ⬜ `firmware/sweat_midi.ino` を XIAO に焼く → iPad/PC と BLE-MIDI ペアリング
-5. ⬜ 音源(Ableton/Max/VCV)で CC74/CC7 とノートを受けて発音
+2. ✅ `firmware/sweat_midi.ino` は実コンパイル検証済み(arduino-cli + adafruit:nrf52、16%使用)。BLE-MIDIはコア同梱の native BLEMidi
+3. ⬜ `docs/bom.md` の部品を発注
+4. ⬜ `docs/wiring.md` に従って組む(=電子工作。範囲外)
+5. ⬜ `firmware/sweat_midi.ino` を XIAO に焼く → iPad/PC と BLE-MIDI ペアリング
+6. ⬜ 音源で発音 ← `firmware/sweat_receiver.pd`(Pure Data, 焼いてすぐ鳴る)か任意の音源で CC74/CC7+Note を受ける
 
 実機で出る信号はシミュレータと同じ処理を通るので、ここで作り込んだ音作りがそのまま使える。
