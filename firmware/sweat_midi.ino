@@ -21,10 +21,13 @@
 
 #include <bluefruit.h>
 #include <MIDI.h>
-#include <BLEMIDI_Transport.h>
-#include <hardware/BLEMIDI_Bluefruit.h>
 
-BLEMIDI_CREATE_INSTANCE("SweatSynth", MIDI);
+// BLE-MIDI トランスポートは Adafruit nRF52 コア同梱の native BLEMidi を使う。
+// (lathoub Arduino-BLE-MIDI の nRF52 backend は "IN DEVELOPMENT" スタブで
+//  実装が空=ビルド/動作不可。XIAO nRF52840 で実際に鳴らせる正道はこちら。)
+BLEDis  bledis;
+BLEMidi blemidi;
+MIDI_CREATE_BLE_INSTANCE(blemidi);   // FortySevenEffects MIDI を BLEMidi に接続 → 既存の MIDI.xxx がそのまま動く
 
 // ---------------- 設定(sim/dsp.py と一致させる) ----------------
 static const float FS          = 32.0f;   // 標本化レート(Hz)
@@ -136,9 +139,29 @@ void setup() {
   refractSamples = (int)(REFRACT_SEC * FS);
   sincePeak = refractSamples;
 
-  BLEMIDI.setHandleConnected([]() { Serial.println("BLE-MIDI connected"); });
-  BLEMIDI.setHandleDisconnected([]() { Serial.println("BLE-MIDI disconnected"); });
-  MIDI.begin(MIDI_CHANNEL_OMNI);
+  // --- BLE-MIDI(Adafruit Bluefruit) 初期化 ---
+  Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);   // begin() より前に
+  Bluefruit.begin();
+  Bluefruit.setName("SweatSynth");
+  Bluefruit.setTxPower(4);
+  Bluefruit.autoConnLed(true);
+
+  bledis.setManufacturer("sweat-synth");
+  bledis.setModel("XIAO nRF52840");
+  bledis.begin();
+
+  MIDI.begin(MIDI_CHANNEL_OMNI);   // blemidi.begin() も内部で呼ばれる
+
+  // アドバタイズ開始(切断時は自動再開・接続まで無期限)
+  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+  Bluefruit.Advertising.addTxPower();
+  Bluefruit.Advertising.addService(blemidi);
+  Bluefruit.ScanResponse.addName();
+  Bluefruit.Advertising.restartOnDisconnect(true);
+  Bluefruit.Advertising.setInterval(32, 244);
+  Bluefruit.Advertising.setFastTimeout(30);
+  Bluefruit.Advertising.start(0);
+
   Serial.println("SweatSynth ready. Pair 'SweatSynth' over BLE-MIDI.");
 }
 
