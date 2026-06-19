@@ -6,8 +6,9 @@
  * シミュレータで詰めた挙動(ノイズLP→tonic抽出→正規化→SCRピーク検出)をそのまま実機へ。
  *
  *   GSRモジュール出力 → A0(ADC) → DSP → BLE-MIDI
- *        tonic_norm → CC74(フィルタ) + CC7(音量)
- *        SCRピーク  → Note On(ペンタトニック)
+ *        tonic_norm → CC74(フィルタ) + CC7(音量) + 音域の牽引(覚醒→高音)
+ *        SCRピーク  → Note On(声部進行: 移動root+重心復元+前音への近接)
+ *                     velocity=タッチ(汗ピーク強)→受信側の音色明るさを駆動
  *
  * 必要ライブラリ(Arduino IDE / arduino-cli でインストール):
  *   - "MIDI Library"        by FortySevenEffects
@@ -38,9 +39,13 @@ static const float SPAN_FLOOR  = 0.05f;
 static const uint8_t CC_CUTOFF = 74;
 static const uint8_t CC_VOLUME = 7;
 static const uint8_t CH        = 1;       // MIDIチャンネル(1-16)
-// Cマイナー・ペンタトニック(sim/midi_map.py と同一)
-static const uint8_t PENTA[]   = {60, 63, 65, 67, 70, 72, 75, 77};
-static const int     N_PENTA   = sizeof(PENTA) / sizeof(PENTA[0]);
+
+// --- 声部進行(sim/async_synth.py 移植) ---
+// 不協和寄りの色(根音からの半音): M2,m3,tritone,m7,M7,b9,9,#11
+static const int COLOR[]   = {0, 2, 3, 6, 10, 11, 13, 14, 18};
+static const int N_COLOR   = sizeof(COLOR) / sizeof(COLOR[0]);
+static const int HOME      = 55;          // 調性重心(sim theta=100Hz の home_pc=G に一致)
+static const int NOTE_LO   = 36, NOTE_HI = 84;   // 音域の上下限
 
 // ---------------- 一次LP ----------------
 struct OnePole {
@@ -86,7 +91,8 @@ int   refractSamples;
 int   sincePeak;
 float prevPhasic = 0;
 bool  rising = false;
-int   pentaDeg = 0;
+int   rootPc   = HOME;   // ゆっくり漂う調性の根音
+int   prevPitch = HOME;  // 直前に弾いた音(声部進行の参照点)
 
 uint32_t lastMicros = 0;
 const uint32_t periodUs = (uint32_t)(1e6 / FS);
@@ -144,13 +150,45 @@ void processSample(float raw) {
     rising = true;
   } else if (rising && phasic < prevPhasic) {
     if (sincePeak >= refractSamples) {
-      float amp = prevPhasic;
-      int vel = 40 + (int)(min(1.0f, amp * 250.0f / 127.0f) * 80.0f);
+      // --- タッチ: 汗ピークの強さ→velocity(受信側の velocity→VCF で明るさを駆動) ---
+      float touch = min(1.0f, prevPhasic * 4.0f);   // sim/async_synth.py の touch と同一スケール
+      int vel = 40 + (int)(touch * 80.0f);
       if (vel > 120) vel = 120; if (vel < 40) vel = 40;
-      uint8_t note = PENTA[pentaDeg % N_PENTA];
-      pentaDeg++;
+
+      // --- 声部進行(sim/async_synth.py render 移植) ---
+      // 根音をゆっくりドリフト + 重心HOMEへの復元力(離れ過ぎたら引き戻す)
+      if ((int)random(100) < 18) {
+        static const int drift4[4] = {-2, -1, 1, 2};
+        rootPc += drift4[(int)random(4)];
+        if (rootPc - HOME >  5) rootPc -= 1;
+        if (rootPc - HOME < -5) rootPc += 1;
+      }
+      // 発汗(覚醒tn)が音域の重心を緩く牽引
+      int target = HOME + (int)lroundf(tn * 12.0f);
+      // color度 × オクターブの候補を生成
+      int cands[N_COLOR * 4]; int nc = 0;
+      for (int i = 0; i < N_COLOR; i++)
+        for (int o = -1; o <= 2; o++) {
+          int c = rootPc + COLOR[i] + 12 * o;
+          if (c >= NOTE_LO && c <= NOTE_HI) cands[nc++] = c;
+        }
+      int note = prevPitch;
+      if (nc > 0) {
+        if ((int)random(100) < 20) {            // 20%: 跳躍で気配を変える
+          note = cands[(int)random(nc)];
+        } else {                                 // 80%: 前音・目標域に近い=滑らかな線
+          float best = 1e9f;
+          for (int k = 0; k < nc; k++) {
+            float cost = fabsf((float)(cands[k] - prevPitch))
+                       + 0.3f * fabsf((float)(cands[k] - target));
+            if (cost < best) { best = cost; note = cands[k]; }
+          }
+        }
+      }
+      prevPitch = note;
+
       if (lastNote >= 0) MIDI.sendNoteOff(lastNote, 0, CH);
-      MIDI.sendNoteOn(note, vel, CH);
+      MIDI.sendNoteOn((uint8_t)note, vel, CH);
       lastNote = note;
       noteOffAtMs = millis() + NOTE_DUR_MS;
       sincePeak = 0;
