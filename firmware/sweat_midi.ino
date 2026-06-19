@@ -112,9 +112,23 @@ static inline float readEda() {
   return (float)raw / 1023.0f * 10.0f;  // 0..10 の相対スケールへ
 }
 
+// 起動ごとに違う声部進行/跳躍にするための種をアナログノイズから収穫する。
+// A0(EDAセンサ)の最下位ビットは実アナログ信号のジッタで揺れるので、
+// 多数読んでLSBを畳み込み、micros()のタイミング揺らぎと混ぜる。
+static uint32_t harvestSeed() {
+  uint32_t s = micros();
+  for (int i = 0; i < 32; i++) {
+    s = (s << 1) | (analogRead(ADC_PIN) & 1u);
+    s ^= (uint32_t)micros();          // 収集タイミングの揺らぎも混ぜる
+    delayMicroseconds(157);           // ADC整定 + LSBが変わる間を置く(素数us)
+  }
+  return s ? s : 0xA5A5A5A5u;          // 万一全0でも縮退しない
+}
+
 void setup() {
   Serial.begin(115200);
   analogReadResolution(10);
+  randomSeed(harvestSeed());           // ← アナログノイズで乱数系列を毎回変える
 
   lpNoise.setup(FS, NOISE_FC);
   lpTonic.setup(FS, TONIC_FC);
