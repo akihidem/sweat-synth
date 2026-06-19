@@ -29,7 +29,8 @@ RNG = np.random.default_rng(0)   # render時に seed 上書き
 
 # 不協和寄りの色(根音からの半音): M2,m3,tritone,m7,M7,b9,9,#11
 COLOR = [0, 2, 3, 6, 10, 11, 13, 14, 18]
-DRONE = {"theta": 100.0, "delta": 68.05, "alpha": 110.0}
+# ドローン根音(Hz)。脳波/弛緩の連想で命名。低い sub〜高い gamma まで音律を選べる
+DRONE = {"sub": 49.0, "delta": 68.05, "theta": 100.0, "alpha": 110.0, "gamma": 141.0}
 
 
 def midi_hz(n):
@@ -52,11 +53,13 @@ def make_drift(N, sr):
 
 
 # ---------- プリペアド/減衰ピアノ(倍音は非整数=inharmonic, detune) ----------
-def piano_note(f, dur, sr, drift_slice, decay=6.0, B=0.00045, bright=0.5):
+def piano_note(f, dur, sr, drift_slice, decay=6.0, B=0.00045, bright=0.5, prepared=False):
     n = int(dur * sr)
     t = np.arange(n) / sr
     td = t + drift_slice[:n]                      # wow&flutter で時間を歪ませる
     f *= 1.0 + RNG.uniform(-0.004, 0.004)         # 一音ごとの調律ずれ
+    if prepared:
+        B = B * 8.0                               # プリペアド: 弦に物を挟んだ金属的な非整数倍音
     # 強く弾くほど上倍音が立つ(実ピアノのタッチ): 弱=暗い1.8 / 強=明るい1.0 のロールオフ
     rolloff = 1.8 - 0.8 * bright
     sig = np.zeros(n)
@@ -67,8 +70,9 @@ def piano_note(f, dur, sr, drift_slice, decay=6.0, B=0.00045, bright=0.5):
     atk = int((0.012 - 0.009 * bright) * sr)       # 弱打鍵=柔らかく遅い / 強打鍵=速い立上り
     if atk:
         env[:atk] *= np.linspace(0, 1, atk)
-    # フェルトの打鍵ノイズ(thunk): 強い打鍵ほど硬い音(短く鋭く)
-    thunk = RNG.standard_normal(n) * np.exp(-t * (55 + 50 * bright)) * (0.12 + 0.12 * bright)
+    # フェルトの打鍵ノイズ(thunk): 強い打鍵ほど硬い音(短く鋭く)。プリペアドはミュート/バズで増す
+    thunk_gain = (0.12 + 0.12 * bright) * (2.4 if prepared else 1.0)
+    thunk = RNG.standard_normal(n) * np.exp(-t * (55 + 50 * bright)) * thunk_gain
     return sig * env + thunk * env
 
 
@@ -119,6 +123,8 @@ def reverb_stereo(mono, sr, decay=3.6):
 def render(dur, seed, drone_name):
     global RNG
     RNG = np.random.default_rng(seed)
+    # プリペアド判定用の専用RNG(主系列を乱さない=既存の音列/クラスタを保つ)
+    prng = np.random.default_rng((int(seed) * 2654435761) & 0xFFFFFFFF)
     D = int(round(dur))
     N = D * SR
     drift = make_drift(N + 12 * SR, SR)            # ピアノ余韻ぶん長めに
@@ -148,14 +154,16 @@ def render(dur, seed, drone_name):
         if s.peak_amp is None or s.t - last_t < min_gap:
             continue
         last_t = s.t
+        # 長尺(>120s)は重心自体をゆっくり転調させ「楽章」感を出す(短尺は不動)
+        home_t = home + (int(round(3.0 * np.sin(2 * np.pi * s.t / D))) if D > 120 else 0)
         # 重心は揺れて"帰る": ランダムウォーク + 重心への復元力
         if RNG.random() < 0.18:
             root_pc += int(RNG.choice([-2, -1, 1, 2]))
-            if abs(root_pc - home) > 5:             # 遠ざかり過ぎたら引き戻す
-                root_pc += int(np.sign(home - root_pc))
+            if abs(root_pc - home_t) > 5:           # 遠ざかり過ぎたら引き戻す
+                root_pc += int(np.sign(home_t - root_pc))
         # 発汗(覚醒)が音域を緩く牽引 ─ 手汗の気配を残しつつ旋律の論理も生かす
         tn = tonic_at(s.t)
-        target = home + int(round(tn * 12))         # tonic がレジスタを"そっと"動かす
+        target = home_t + int(round(tn * 12))       # tonic がレジスタを"そっと"動かす
         # 声部進行: color 度 × オクターブ候補から「前音と目標域に近い」線を選ぶ
         cands = [root_pc + deg + 12 * o for deg in COLOR for o in (-1, 0, 1, 2)]
         cands = [c for c in cands if 36 <= c <= 84]
@@ -168,22 +176,31 @@ def render(dur, seed, drone_name):
         prev_pitch = note
         touch = min(1.0, s.peak_amp * 4)            # 汗ピークの強さ=打鍵の強さ
         amp = 0.18 + 0.45 * touch
-        decay = 5.0 + 6.0 * RNG.random()            # 長い余韻
-        notes.append((s.t, note, amp, decay, touch))
+        # 12%: プリペアドピアノの所作(物を挟んだ短く金属的な減衰音)。
+        # 専用prng で判定し主系列を乱さない(既存の音列/クラスタを保つ)
+        prepared = prng.random() < 0.12
+        r = RNG.random()                            # decay 用に従来通り1ドロー(系列維持)
+        decay = (1.2 + 1.3 * r) if prepared else (5.0 + 6.0 * r)
+        notes.append((s.t, note, amp, decay, touch, prepared))
         # 15%: 短2/長2度のクラスタ(不協和の色)。寄り添う音は柔らかく弾く
         if RNG.random() < 0.15:
             notes.append((s.t + RNG.uniform(0, 0.05), note + int(RNG.choice([1, 2])),
-                          amp * 0.7, decay * 0.8, touch * 0.6))
+                          amp * 0.7, decay * 0.8, touch * 0.6, False))
 
     # 大局フォーム: 入り・退きは静かに、中盤で深まる弧(音は増やさず強弱で形を作る)
+    # 長尺は複数の呼吸(楽章)を重ね、均質な平坦さを避ける
     def arc(t0):
-        x = t0 / max(D, 1)                          # 0..1
-        return 0.55 + 0.45 * np.sin(np.pi * min(1.0, max(0.0, x)))
+        x = min(1.0, max(0.0, t0 / max(D, 1)))      # 0..1
+        a = 0.55 + 0.45 * np.sin(np.pi * x)         # 全体の大アーチ
+        if D > 120:
+            a *= 0.75 + 0.25 * (0.5 + 0.5 * np.sin(2 * np.pi * (D / 75.0) * x))
+        return a
 
-    for (t0, note, amp, decay, touch) in notes:
+    for (t0, note, amp, decay, touch, prepared) in notes:
         start = int(t0 * SR)
         amp *= arc(t0)
-        sig = piano_note(midi_hz(note), decay, SR, drift[start:], decay=decay, bright=touch)
+        sig = piano_note(midi_hz(note), decay, SR, drift[start:], decay=decay,
+                         bright=touch, prepared=prepared)
         end = start + len(sig)
         pan = RNG.uniform(-0.4, 0.4)
         gl = amp * np.cos((pan + 1) * np.pi / 4)
